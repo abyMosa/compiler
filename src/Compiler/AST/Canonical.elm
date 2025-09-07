@@ -107,7 +107,7 @@ type Expr_
     | Case Expr (List CaseBranch)
     | Accessor Name
     | Access Expr (A.Located Name)
-    | Update (Maybe Name) Name Expr (Dict String (A.Located Name) FieldUpdate)
+    | Update Expr (Dict String (A.Located Name) FieldUpdate)
     | Record (Dict String (A.Located Name) Expr)
     | Unit
     | Tuple Expr Expr (List Expr)
@@ -156,7 +156,7 @@ type Pattern_
     | PCons Pattern Pattern
     | PBool Union Bool
     | PChr String
-    | PStr String
+    | PStr String Bool
     | PInt Int
     | PCtor
         -- CACHE p_home, p_type, and p_vars for type inference
@@ -770,11 +770,9 @@ expr_Encoder expr_ =
                 , A.locatedEncoder BE.string field
                 ]
 
-        Update namespace name record updates ->
+        Update record updates ->
             BE.sequence
                 [ BE.unsignedInt8 23
-                , BE.maybe BE.string namespace
-                , BE.string name
                 , exprEncoder record
                 , BE.assocListDict A.compareLocated (A.toValue >> BE.string) fieldUpdateEncoder updates
                 ]
@@ -922,9 +920,7 @@ expr_Decoder =
                             (A.locatedDecoder BD.string)
 
                     23 ->
-                        BD.map4 Update
-                            (BD.maybe BD.string)
-                            BD.string
+                        BD.map2 Update
                             exprDecoder
                             (BD.assocListDict A.toValue (A.locatedDecoder BD.string) fieldUpdateDecoder)
 
@@ -1023,10 +1019,11 @@ pattern_Encoder pattern_ =
                 , BE.string chr
                 ]
 
-        PStr str ->
+        PStr str multiline ->
             BE.sequence
                 [ BE.unsignedInt8 10
                 , BE.string str
+                , BE.bool multiline
                 ]
 
         PInt int ->
@@ -1096,7 +1093,9 @@ pattern_Decoder =
                         BD.map PChr BD.string
 
                     10 ->
-                        BD.map PStr BD.string
+                        BD.map2 PStr
+                            BD.string
+                            BD.bool
 
                     11 ->
                         BD.map PInt BD.int

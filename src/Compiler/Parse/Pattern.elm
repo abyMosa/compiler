@@ -68,10 +68,10 @@ termHelp syntaxVersion start =
                         |> P.bind
                             (\end ->
                                 case number of
-                                    Number.Int int ->
-                                        P.pure (A.at start end (Src.PInt int))
+                                    Number.Int int src ->
+                                        P.pure (A.at start end (Src.PInt int src))
 
-                                    Number.Float float ->
+                                    Number.Float float _ ->
                                         P.Parser <|
                                             \(P.State _ _ _ _ row col) ->
                                                 let
@@ -84,7 +84,7 @@ termHelp syntaxVersion start =
                             )
                 )
         , String.string E.PStart E.PString
-            |> P.bind (\str -> P.addEnd start (Src.PStr str))
+            |> P.bind (\( str, multiline ) -> P.addEnd start (Src.PStr str multiline))
         , String.character E.PStart E.PChar
             |> P.bind (\chr -> P.addEnd start (Src.PChr chr))
         ]
@@ -158,34 +158,43 @@ record start =
     P.inContext E.PRecord (P.word1 '{' E.PStart) <|
         (Space.chompAndCheckIndent E.PRecordSpace E.PRecordIndentOpen
             |> P.bind
-                (\_ ->
+                (\preVarComments ->
                     P.oneOf E.PRecordOpen
                         [ P.addLocation (Var.lower E.PRecordField)
                             |> P.bind
                                 (\var ->
                                     Space.chompAndCheckIndent E.PRecordSpace E.PRecordIndentEnd
-                                        |> P.bind (\_ -> recordHelp start [ var ])
+                                        |> P.bind
+                                            (\postVarComments ->
+                                                recordHelp start [ ( ( preVarComments, postVarComments ), var ) ]
+                                            )
                                 )
                         , P.word1 '}' E.PRecordEnd
-                            |> P.bind (\_ -> P.addEnd start (Src.PRecord []))
+                            |> P.bind (\_ -> P.addEnd start (Src.PRecord ( preVarComments, [] )))
                         ]
                 )
         )
 
 
-recordHelp : A.Position -> List (A.Located Name.Name) -> P.Parser E.PRecord Src.Pattern
+recordHelp : A.Position -> List (Src.C2 (A.Located Name.Name)) -> P.Parser E.PRecord Src.Pattern
 recordHelp start vars =
     P.oneOf E.PRecordEnd
         [ P.word1 ',' E.PRecordEnd
             |> P.bind (\_ -> Space.chompAndCheckIndent E.PRecordSpace E.PRecordIndentField)
-            |> P.bind (\_ -> P.addLocation (Var.lower E.PRecordField))
             |> P.bind
-                (\var ->
-                    Space.chompAndCheckIndent E.PRecordSpace E.PRecordIndentEnd
-                        |> P.bind (\_ -> recordHelp start (var :: vars))
+                (\preVarComments ->
+                    P.addLocation (Var.lower E.PRecordField)
+                        |> P.bind
+                            (\var ->
+                                Space.chompAndCheckIndent E.PRecordSpace E.PRecordIndentEnd
+                                    |> P.bind
+                                        (\postVarComments ->
+                                            recordHelp start (( ( preVarComments, postVarComments ), var ) :: vars)
+                                        )
+                            )
                 )
         , P.word1 '}' E.PRecordEnd
-            |> P.bind (\_ -> P.addEnd start (Src.PRecord vars))
+            |> P.bind (\_ -> P.addEnd start (Src.PRecord ( [], vars )))
         ]
 
 
@@ -198,38 +207,41 @@ tuple syntaxVersion start =
     P.inContext E.PTuple (P.word1 '(' E.PStart) <|
         (Space.chompAndCheckIndent E.PTupleSpace E.PTupleIndentExpr1
             |> P.bind
-                (\_ ->
+                (\prePatternComments ->
                     P.oneOf E.PTupleOpen
                         [ P.specialize E.PTupleExpr (expression syntaxVersion)
                             |> P.bind
-                                (\( pattern, end ) ->
+                                (\( ( postPatternComments, pattern ), end ) ->
                                     Space.checkIndent end E.PTupleIndentEnd
-                                        |> P.bind (\_ -> tupleHelp syntaxVersion start pattern [])
+                                        |> P.bind (\_ -> tupleHelp syntaxVersion start ( ( prePatternComments, postPatternComments ), pattern ) [])
                                 )
                         , P.word1 ')' E.PTupleEnd
-                            |> P.bind (\_ -> P.addEnd start Src.PUnit)
+                            |> P.bind (\_ -> P.addEnd start (Src.PUnit []))
                         ]
                 )
         )
 
 
-tupleHelp : SyntaxVersion -> A.Position -> Src.Pattern -> List Src.Pattern -> P.Parser E.PTuple Src.Pattern
+tupleHelp : SyntaxVersion -> A.Position -> Src.C2 Src.Pattern -> List (Src.C2 Src.Pattern) -> P.Parser E.PTuple Src.Pattern
 tupleHelp syntaxVersion start firstPattern revPatterns =
     P.oneOf E.PTupleEnd
         [ P.word1 ',' E.PTupleEnd
             |> P.bind (\_ -> Space.chompAndCheckIndent E.PTupleSpace E.PTupleIndentExprN)
-            |> P.bind (\_ -> P.specialize E.PTupleExpr (expression syntaxVersion))
             |> P.bind
-                (\( pattern, end ) ->
-                    Space.checkIndent end E.PTupleIndentEnd
-                        |> P.bind (\_ -> tupleHelp syntaxVersion start firstPattern (pattern :: revPatterns))
+                (\prePatternComments ->
+                    P.specialize E.PTupleExpr (expression syntaxVersion)
+                        |> P.bind
+                            (\( ( postPatternComments, pattern ), end ) ->
+                                Space.checkIndent end E.PTupleIndentEnd
+                                    |> P.bind (\_ -> tupleHelp syntaxVersion start firstPattern (( ( prePatternComments, postPatternComments ), pattern ) :: revPatterns))
+                            )
                 )
         , P.word1 ')' E.PTupleEnd
             |> P.bind
                 (\_ ->
                     case List.reverse revPatterns of
                         [] ->
-                            P.pure firstPattern
+                            P.addEnd start (Src.PParens firstPattern)
 
                         secondPattern :: otherPatterns ->
                             P.addEnd start (Src.PTuple firstPattern secondPattern otherPatterns)
@@ -246,34 +258,37 @@ list syntaxVersion start =
     P.inContext E.PList (P.word1 '[' E.PStart) <|
         (Space.chompAndCheckIndent E.PListSpace E.PListIndentOpen
             |> P.bind
-                (\_ ->
+                (\prePatternComments ->
                     P.oneOf E.PListOpen
                         [ P.specialize E.PListExpr (expression syntaxVersion)
                             |> P.bind
-                                (\( pattern, end ) ->
+                                (\( ( postPatternComments, pattern ), end ) ->
                                     Space.checkIndent end E.PListIndentEnd
-                                        |> P.bind (\_ -> listHelp syntaxVersion start [ pattern ])
+                                        |> P.bind (\_ -> listHelp syntaxVersion start [ ( ( prePatternComments, postPatternComments ), pattern ) ])
                                 )
                         , P.word1 ']' E.PListEnd
-                            |> P.bind (\_ -> P.addEnd start (Src.PList []))
+                            |> P.bind (\_ -> P.addEnd start (Src.PList ( prePatternComments, [] )))
                         ]
                 )
         )
 
 
-listHelp : SyntaxVersion -> A.Position -> List Src.Pattern -> P.Parser E.PList Src.Pattern
+listHelp : SyntaxVersion -> A.Position -> List (Src.C2 Src.Pattern) -> P.Parser E.PList Src.Pattern
 listHelp syntaxVersion start patterns =
     P.oneOf E.PListEnd
         [ P.word1 ',' E.PListEnd
             |> P.bind (\_ -> Space.chompAndCheckIndent E.PListSpace E.PListIndentExpr)
-            |> P.bind (\_ -> P.specialize E.PListExpr (expression syntaxVersion))
             |> P.bind
-                (\( pattern, end ) ->
-                    Space.checkIndent end E.PListIndentEnd
-                        |> P.bind (\_ -> listHelp syntaxVersion start (pattern :: patterns))
+                (\prePatternComments ->
+                    P.specialize E.PListExpr (expression syntaxVersion)
+                        |> P.bind
+                            (\( ( postPatternComments, pattern ), end ) ->
+                                Space.checkIndent end E.PListIndentEnd
+                                    |> P.bind (\_ -> listHelp syntaxVersion start (( ( prePatternComments, postPatternComments ), pattern ) :: patterns))
+                            )
                 )
         , P.word1 ']' E.PListEnd
-            |> P.bind (\_ -> P.addEnd start (Src.PList (List.reverse patterns)))
+            |> P.bind (\_ -> P.addEnd start (Src.PList ( [], List.reverse patterns )))
         ]
 
 
@@ -281,7 +296,7 @@ listHelp syntaxVersion start patterns =
 -- EXPRESSION
 
 
-expression : SyntaxVersion -> Space.Parser E.Pattern Src.Pattern
+expression : SyntaxVersion -> Space.Parser E.Pattern (Src.C1 Src.Pattern)
 expression syntaxVersion =
     P.getPosition
         |> P.bind
@@ -294,57 +309,63 @@ expression syntaxVersion =
             )
 
 
-exprHelp : SyntaxVersion -> A.Position -> List Src.Pattern -> ( Src.Pattern, A.Position ) -> Space.Parser E.Pattern Src.Pattern
-exprHelp syntaxVersion start revPatterns ( pattern, end ) =
+exprHelp : SyntaxVersion -> A.Position -> List (Src.C2 Src.Pattern) -> ( Src.C1 Src.Pattern, A.Position ) -> Space.Parser E.Pattern (Src.C1 Src.Pattern)
+exprHelp syntaxVersion start revPatterns ( ( prePatternComments, pattern ), end ) =
     P.oneOfWithFallback
         [ Space.checkIndent end E.PIndentStart
             |> P.bind (\_ -> P.word2 ':' ':' E.PStart)
             |> P.bind (\_ -> Space.chompAndCheckIndent E.PSpace E.PIndentStart)
-            |> P.bind (\_ -> exprPart syntaxVersion)
-            |> P.bind (\ePart -> exprHelp syntaxVersion start (pattern :: revPatterns) ePart)
+            |> P.bind
+                (\postPatternComments ->
+                    exprPart syntaxVersion
+                        |> P.bind (\ePart -> exprHelp syntaxVersion start (( ( prePatternComments, postPatternComments ), pattern ) :: revPatterns) ePart)
+                )
         , Space.checkIndent end E.PIndentStart
             |> P.bind (\_ -> Keyword.as_ E.PStart)
             |> P.bind (\_ -> Space.chompAndCheckIndent E.PSpace E.PIndentAlias)
-            |> P.bind (\_ -> P.getPosition)
             |> P.bind
-                (\nameStart ->
-                    Var.lower E.PAlias
+                (\preAliasComments ->
+                    P.getPosition
                         |> P.bind
-                            (\name ->
-                                P.getPosition
+                            (\nameStart ->
+                                Var.lower E.PAlias
                                     |> P.bind
-                                        (\newEnd ->
-                                            Space.chomp E.PSpace
-                                                |> P.fmap
-                                                    (\_ ->
-                                                        let
-                                                            alias_ : A.Located Name.Name
-                                                            alias_ =
-                                                                A.at nameStart newEnd name
-                                                        in
-                                                        ( A.at start newEnd (Src.PAlias (List.foldl cons pattern revPatterns) alias_)
-                                                        , newEnd
-                                                        )
+                                        (\name ->
+                                            P.getPosition
+                                                |> P.bind
+                                                    (\newEnd ->
+                                                        Space.chomp E.PSpace
+                                                            |> P.fmap
+                                                                (\postAliasComments ->
+                                                                    let
+                                                                        alias_ : A.Located Name.Name
+                                                                        alias_ =
+                                                                            A.at nameStart newEnd name
+                                                                    in
+                                                                    ( ( postAliasComments, A.at start newEnd (Src.PAlias ( prePatternComments, List.foldl cons pattern revPatterns ) ( preAliasComments, alias_ )) )
+                                                                    , newEnd
+                                                                    )
+                                                                )
                                                     )
                                         )
                             )
                 )
         ]
-        ( List.foldl cons pattern revPatterns
+        ( ( prePatternComments, List.foldl cons pattern revPatterns )
         , end
         )
 
 
-cons : Src.Pattern -> Src.Pattern -> Src.Pattern
-cons hd tl =
-    A.merge hd tl (Src.PCons hd tl)
+cons : Src.C2 Src.Pattern -> Src.Pattern -> Src.Pattern
+cons ( ( preComments, postComments ), hd ) tl =
+    A.merge hd tl (Src.PCons ( Nothing, hd ) ( ( preComments, postComments, Nothing ), tl ))
 
 
 
 -- EXPRESSION PART
 
 
-exprPart : SyntaxVersion -> Space.Parser E.Pattern Src.Pattern
+exprPart : SyntaxVersion -> Space.Parser E.Pattern (Src.C1 Src.Pattern)
 exprPart syntaxVersion =
     P.oneOf E.PStart
         [ P.getPosition
@@ -361,31 +382,33 @@ exprPart syntaxVersion =
             |> P.bind
                 (\((A.At (A.Region _ end) _) as eterm) ->
                     Space.chomp E.PSpace
-                        |> P.fmap (\_ -> ( eterm, end ))
+                        |> P.fmap (\comments -> ( ( comments, eterm ), end ))
                 )
         ]
 
 
-exprTermHelp : SyntaxVersion -> A.Region -> Var.Upper -> A.Position -> List Src.Pattern -> Space.Parser E.Pattern Src.Pattern
+exprTermHelp : SyntaxVersion -> A.Region -> Var.Upper -> A.Position -> List (Src.C1 Src.Pattern) -> Space.Parser E.Pattern (Src.C1 Src.Pattern)
 exprTermHelp syntaxVersion region upper start revArgs =
     P.getPosition
         |> P.bind
             (\end ->
                 Space.chomp E.PSpace
                     |> P.bind
-                        (\_ ->
+                        (\comments ->
                             P.oneOfWithFallback
                                 [ Space.checkIndent end E.PIndentStart
                                     |> P.bind (\_ -> term syntaxVersion)
-                                    |> P.bind (\arg -> exprTermHelp syntaxVersion region upper start (arg :: revArgs))
+                                    |> P.bind (\arg -> exprTermHelp syntaxVersion region upper start (( [], arg ) :: revArgs))
                                 ]
-                                ( A.at start end <|
-                                    case upper of
-                                        Var.Unqualified name ->
-                                            Src.PCtor region name (List.reverse revArgs)
+                                ( ( comments
+                                  , A.at start end <|
+                                        case upper of
+                                            Var.Unqualified name ->
+                                                Src.PCtor region name (List.reverse revArgs)
 
-                                        Var.Qualified home name ->
-                                            Src.PCtorQual region home name (List.reverse revArgs)
+                                            Var.Qualified home name ->
+                                                Src.PCtorQual region home name (List.reverse revArgs)
+                                  )
                                 , end
                                 )
                         )

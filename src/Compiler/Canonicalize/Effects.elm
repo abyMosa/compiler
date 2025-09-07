@@ -58,7 +58,7 @@ canonicalize syntaxVersion env values unions effects =
                 |> R.apply (verifyManager region dict "onSelfMsg")
                 |> R.apply
                     (case manager of
-                        Src.Cmd cmdType ->
+                        Src.Cmd ( _, ( _, cmdType ) ) ->
                             R.fmap Can.Cmd (verifyEffectType cmdType unions)
                                 |> R.bind
                                     (\result ->
@@ -66,7 +66,7 @@ canonicalize syntaxVersion env values unions effects =
                                             |> R.fmap (\_ -> result)
                                     )
 
-                        Src.Sub subType ->
+                        Src.Sub ( _, ( _, subType ) ) ->
                             R.fmap Can.Sub (verifyEffectType subType unions)
                                 |> R.bind
                                     (\result ->
@@ -74,7 +74,7 @@ canonicalize syntaxVersion env values unions effects =
                                             |> R.fmap (\_ -> result)
                                     )
 
-                        Src.Fx cmdType subType ->
+                        Src.Fx ( _, ( _, cmdType ) ) ( _, ( _, subType ) ) ->
                             R.fmap Can.Fx (verifyEffectType cmdType unions)
                                 |> R.apply (verifyEffectType subType unions)
                                 |> R.bind
@@ -95,7 +95,7 @@ canonicalize syntaxVersion env values unions effects =
 
 
 canonicalizePort : SyntaxVersion -> Env.Env -> Src.Port -> EResult i w ( Name.Name, Can.Port )
-canonicalizePort syntaxVersion env (Src.Port (A.At region portName) tipe) =
+canonicalizePort syntaxVersion env (Src.Port _ ( _, A.At region portName ) tipe) =
     Type.toAnnotation syntaxVersion env tipe
         |> R.bind
             (\(Can.Forall freeVars ctipe) ->
@@ -180,7 +180,7 @@ verifyEffectType (A.At region name) unions =
 
 
 toNameRegion : A.Located Src.Value -> ( Name.Name, A.Region )
-toNameRegion (A.At _ (Src.Value (A.At region name) _ _ _)) =
+toNameRegion (A.At _ (Src.Value _ ( _, A.At region name ) _ _ _)) =
     ( name, region )
 
 

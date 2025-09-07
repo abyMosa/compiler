@@ -2,7 +2,8 @@ module Terminal.Main exposing (main)
 
 import Compiler.Elm.Version as V
 import Compiler.Reporting.Doc as D
-import System.IO as IO exposing (IO)
+import System.IO as IO
+import Task exposing (Task)
 import Terminal.Bump as Bump
 import Terminal.Diff as Diff
 import Terminal.Format as Format
@@ -15,15 +16,17 @@ import Terminal.Terminal as Terminal
 import Terminal.Terminal.Chomp as Chomp
 import Terminal.Terminal.Helpers as Terminal
 import Terminal.Terminal.Internal as Terminal
+import Terminal.Test as Test
 import Terminal.Uninstall as Uninstall
 import Utils.Impure as Impure
+import Utils.Task.Extra as Task
 
 
 main : IO.Program
 main =
     IO.run
         (app
-            |> IO.bind
+            |> Task.bind
                 (\() ->
                     Impure.task "exitWith"
                         []
@@ -33,7 +36,7 @@ main =
         )
 
 
-app : IO ()
+app : Task Never ()
 app =
     Terminal.app intro
         outro
@@ -46,6 +49,7 @@ app =
         , diff
         , publish
         , format
+        , test
         ]
 
 
@@ -176,8 +180,8 @@ interpreter =
     Terminal.Parser
         { singular = "interpreter"
         , plural = "interpreters"
-        , suggest = \_ -> IO.pure []
-        , examples = \_ -> IO.pure [ "node", "nodejs" ]
+        , suggest = \_ -> Task.pure []
+        , examples = \_ -> Task.pure [ "node", "nodejs" ]
         }
 
 
@@ -580,9 +584,76 @@ output =
     Terminal.Parser
         { singular = "output"
         , plural = "outputs"
-        , suggest = \_ -> IO.pure []
-        , examples = \_ -> IO.pure []
+        , suggest = \_ -> Task.pure []
+        , examples = \_ -> Task.pure []
         }
+
+
+
+-- TEST
+
+
+test : Terminal.Command
+test =
+    let
+        details : String
+        details =
+            "The `test` command runs tests."
+
+        example : D.Doc
+        example =
+            stack
+                [ reflow "For example:"
+                , D.indent 4 <| D.green (D.fromChars "guida test")
+                , reflow "Run tests in the tests/ folder."
+                , D.indent 4 <| D.green (D.fromChars "guida test src/Main.guida")
+                , reflow "Run tests in files matching the glob."
+                ]
+
+        testArgs : Terminal.Args
+        testArgs =
+            Terminal.zeroOrMore Terminal.filePath
+
+        testFlags : Terminal.Flags
+        testFlags =
+            Terminal.flags
+                |> Terminal.more (Terminal.flag "fuzz" int "Run with a specific fuzzer seed (default: random)")
+                |> Terminal.more (Terminal.flag "seed" int "Define how many times each fuzz-test should run (default: 100)")
+                |> Terminal.more (Terminal.flag "report" Test.format "Specify which format to use for reporting test results (choices: \"json\", \"junit\", \"console\", default: \"console\")")
+    in
+    Terminal.Command "test" Terminal.Uncommon details example testArgs testFlags <|
+        \chunks ->
+            Chomp.chomp Nothing
+                chunks
+                [ Chomp.chompMultiple (Chomp.pure identity) Terminal.filePath Terminal.parseFilePath
+                ]
+                (Chomp.pure Test.Flags
+                    |> Chomp.apply (Chomp.chompNormalFlag "seed" int parseInt)
+                    |> Chomp.apply (Chomp.chompNormalFlag "fuzz" int parseInt)
+                    |> Chomp.apply (Chomp.chompNormalFlag "report" Test.format Test.parseReport)
+                    |> Chomp.bind
+                        (\value ->
+                            Chomp.checkForUnknownFlags testFlags
+                                |> Chomp.fmap (\_ -> value)
+                        )
+                )
+                |> Tuple.second
+                |> Result.map (\( args, flags ) -> Test.run args flags)
+
+
+int : Terminal.Parser
+int =
+    Terminal.Parser
+        { singular = "int"
+        , plural = "ints"
+        , suggest = \_ -> Task.pure []
+        , examples = \_ -> Task.pure []
+        }
+
+
+parseInt : String -> Maybe Int
+parseInt =
+    String.toInt
 
 
 

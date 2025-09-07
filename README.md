@@ -76,6 +76,14 @@ guida --help
 
 To compare the performance of guida with elm, you can run `./scripts/performance-comparison.sh`.
 
+## Watch mode
+
+You can run the following command to `build:bin` when anything is added, changed or deleted within the `src` directory:
+
+```
+npm run watch
+```
+
 # Examples
 
 To run an example `cd` into the `examples` folder, and run the `guida make` command:

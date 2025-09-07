@@ -1,8 +1,9 @@
 module Browser.Format exposing (run)
 
-import Elm.Syntax.File
-import ElmSyntaxParserLenient
-import ElmSyntaxPrint
+import Common.Format
+import Compiler.Elm.Package as Pkg
+import Compiler.Parse.Module as M
+import Compiler.Parse.SyntaxVersion as SV
 
 
 
@@ -10,21 +11,10 @@ import ElmSyntaxPrint
 
 
 run : String -> Result String String
-run inputText =
-    case ElmSyntaxParserLenient.run ElmSyntaxParserLenient.module_ inputText of
-        Just modu ->
-            Ok (render modu)
-
-        Nothing ->
-            -- FIXME missings errs
-            Err "Something went wrong..."
-
-
-
--- RENDER
-
-
-render : Elm.Syntax.File.File -> String
-render modul =
-    ElmSyntaxPrint.module_ modul
-        |> ElmSyntaxPrint.toString
+run src =
+    Common.Format.format SV.Guida (M.Package Pkg.core) src
+        |> Result.mapError
+            (\_ ->
+                -- FIXME missings errs
+                "Something went wrong..."
+            )

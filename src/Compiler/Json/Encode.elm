@@ -29,7 +29,8 @@ import Compiler.Data.OneOrMore exposing (OneOrMore(..))
 import Data.Map as Dict exposing (Dict)
 import Data.Set as EverySet exposing (EverySet)
 import Json.Encode as Encode
-import System.IO as IO exposing (IO)
+import System.IO as IO
+import Task exposing (Task)
 
 
 
@@ -176,50 +177,45 @@ chars chrs =
 
 escape : String -> String
 escape chrs =
-    case String.toList chrs of
-        [] ->
-            ""
+    String.toList chrs
+        |> List.map
+            (\c ->
+                case c of
+                    '\u{000D}' ->
+                        "\\r"
 
-        c :: cs ->
-            let
-                escapedChar : String
-                escapedChar =
-                    case c of
-                        '\u{000D}' ->
-                            "\\r"
+                    '\n' ->
+                        "\\n"
 
-                        '\n' ->
-                            "\\n"
+                    '"' ->
+                        "\\\""
 
-                        '"' ->
-                            "\\\""
+                    '\\' ->
+                        "\\\\"
 
-                        '\\' ->
-                            "\\\\"
-
-                        _ ->
-                            String.fromChar c
-            in
-            escapedChar ++ escape (String.fromList cs)
+                    _ ->
+                        String.fromChar c
+            )
+        |> String.concat
 
 
 
 -- WRITE TO FILE
 
 
-write : String -> Value -> IO ()
+write : String -> Value -> Task Never ()
 write path value =
     fileWriteBuilder path (encode value ++ "\n")
 
 
-writeUgly : String -> Value -> IO ()
+writeUgly : String -> Value -> Task Never ()
 writeUgly path value =
     fileWriteBuilder path (encodeUgly value)
 
 
 {-| FIXME Builder.File.writeBuilder
 -}
-fileWriteBuilder : String -> String -> IO ()
+fileWriteBuilder : String -> String -> Task Never ()
 fileWriteBuilder =
     IO.writeString
 

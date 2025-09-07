@@ -9,19 +9,20 @@ module Builder.File exposing
     , timeDecoder
     , timeEncoder
     , writeBinary
-    , writeBuilder
     , writePackage
     , writeUtf8
     , zeroTime
     )
 
 import Codec.Archive.Zip as Zip
-import System.IO as IO exposing (IO)
+import System.IO as IO
+import Task exposing (Task)
 import Time
 import Utils.Bytes.Decode as BD
 import Utils.Bytes.Encode as BE
 import Utils.Impure as Impure
 import Utils.Main as Utils exposing (FilePath)
+import Utils.Task.Extra as Task
 
 
 
@@ -32,9 +33,9 @@ type Time
     = Time Time.Posix
 
 
-getTime : FilePath -> IO Time
+getTime : FilePath -> Task Never Time
 getTime path =
-    IO.fmap Time (Utils.dirGetModificationTime path)
+    Task.fmap Time (Utils.dirGetModificationTime path)
 
 
 zeroTime : Time
@@ -46,7 +47,7 @@ zeroTime =
 -- BINARY
 
 
-writeBinary : (a -> BE.Encoder) -> FilePath -> a -> IO ()
+writeBinary : (a -> BE.Encoder) -> FilePath -> a -> Task Never ()
 writeBinary toEncoder path value =
     let
         dir : FilePath
@@ -54,21 +55,21 @@ writeBinary toEncoder path value =
             Utils.fpDropFileName path
     in
     Utils.dirCreateDirectoryIfMissing True dir
-        |> IO.bind (\_ -> Utils.binaryEncodeFile toEncoder path value)
+        |> Task.bind (\_ -> Utils.binaryEncodeFile toEncoder path value)
 
 
-readBinary : BD.Decoder a -> FilePath -> IO (Maybe a)
+readBinary : BD.Decoder a -> FilePath -> Task Never (Maybe a)
 readBinary decoder path =
     Utils.dirDoesFileExist path
-        |> IO.bind
+        |> Task.bind
             (\pathExists ->
                 if pathExists then
                     Utils.binaryDecodeFileOrFail decoder path
-                        |> IO.bind
+                        |> Task.bind
                             (\result ->
                                 case result of
                                     Ok a ->
-                                        IO.pure (Just a)
+                                        Task.pure (Just a)
 
                                     Err ( offset, message ) ->
                                         IO.hPutStrLn IO.stderr
@@ -83,11 +84,11 @@ readBinary decoder path =
                                                 , "+-------------------------------------------------------------------------------"
                                                 ]
                                             )
-                                            |> IO.fmap (\_ -> Nothing)
+                                            |> Task.fmap (\_ -> Nothing)
                             )
 
                 else
-                    IO.pure Nothing
+                    Task.pure Nothing
             )
 
 
@@ -95,7 +96,7 @@ readBinary decoder path =
 -- WRITE UTF-8
 
 
-writeUtf8 : FilePath -> String -> IO ()
+writeUtf8 : FilePath -> String -> Task Never ()
 writeUtf8 =
     IO.writeString
 
@@ -104,34 +105,25 @@ writeUtf8 =
 -- READ UTF-8
 
 
-readUtf8 : FilePath -> IO String
+readUtf8 : FilePath -> Task Never String
 readUtf8 path =
     Impure.task "read" [] (Impure.StringBody path) (Impure.StringResolver identity)
 
 
-readStdin : IO String
+readStdin : Task Never String
 readStdin =
     Impure.task "readStdin" [] Impure.EmptyBody (Impure.StringResolver identity)
-
-
-
--- WRITE BUILDER
-
-
-writeBuilder : FilePath -> String -> IO ()
-writeBuilder =
-    IO.writeString
 
 
 
 -- WRITE PACKAGE
 
 
-writePackage : FilePath -> Zip.Archive -> IO ()
+writePackage : FilePath -> Zip.Archive -> Task Never ()
 writePackage destination archive =
     case Zip.zEntries archive of
         [] ->
-            IO.pure ()
+            Task.pure ()
 
         entry :: entries ->
             let
@@ -142,7 +134,7 @@ writePackage destination archive =
             Utils.mapM_ (writeEntry destination root) entries
 
 
-writeEntry : FilePath -> Int -> Zip.Entry -> IO ()
+writeEntry : FilePath -> Int -> Zip.Entry -> Task Never ()
 writeEntry destination root entry =
     let
         path : String
@@ -156,20 +148,20 @@ writeEntry destination root entry =
             || (path == "elm.json")
     then
         if not (String.isEmpty path) && String.endsWith "/" path then
-            Utils.dirCreateDirectoryIfMissing True (Utils.fpForwardSlash destination path)
+            Utils.dirCreateDirectoryIfMissing True (Utils.fpCombine destination path)
 
         else
-            writeUtf8 (Utils.fpForwardSlash destination path) (Zip.fromEntry entry)
+            writeUtf8 (Utils.fpCombine destination path) (Zip.fromEntry entry)
 
     else
-        IO.pure ()
+        Task.pure ()
 
 
 
 -- EXISTS
 
 
-exists : FilePath -> IO Bool
+exists : FilePath -> Task Never Bool
 exists path =
     Utils.dirDoesFileExist path
 
@@ -178,16 +170,16 @@ exists path =
 -- REMOVE FILES
 
 
-remove : FilePath -> IO ()
+remove : FilePath -> Task Never ()
 remove path =
     Utils.dirDoesFileExist path
-        |> IO.bind
+        |> Task.bind
             (\exists_ ->
                 if exists_ then
                     Utils.dirRemoveFile path
 
                 else
-                    IO.pure ()
+                    Task.pure ()
             )
 
 

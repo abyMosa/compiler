@@ -32,18 +32,18 @@ type Decl
     | Port (Maybe Src.Comment) Src.Port
 
 
-declaration : SyntaxVersion -> Space.Parser E.Decl Decl
+declaration : SyntaxVersion -> Space.Parser E.Decl (Src.C2 Decl)
 declaration syntaxVersion =
     chompDocComment
         |> P.bind
-            (\maybeDocs ->
+            (\( docComments, maybeDocs ) ->
                 P.getPosition
                     |> P.bind
                         (\start ->
                             P.oneOf E.DeclStart
                                 [ typeDecl maybeDocs start
                                 , portDecl maybeDocs
-                                , valueDecl syntaxVersion maybeDocs start
+                                , valueDecl syntaxVersion maybeDocs docComments start
                                 ]
                         )
             )
@@ -53,26 +53,29 @@ declaration syntaxVersion =
 -- DOC COMMENT
 
 
-chompDocComment : P.Parser E.Decl (Maybe Src.Comment)
+chompDocComment : P.Parser E.Decl (Src.C1 (Maybe Src.Comment))
 chompDocComment =
     P.oneOfWithFallback
         [ Space.docComment E.DeclStart E.DeclSpace
             |> P.bind
                 (\docComment ->
                     Space.chomp E.DeclSpace
-                        |> P.bind (\_ -> Space.checkFreshLine E.DeclFreshLineAfterDocComment)
-                        |> P.fmap (\_ -> Just docComment)
+                        |> P.bind
+                            (\comments ->
+                                Space.checkFreshLine E.DeclFreshLineAfterDocComment
+                                    |> P.fmap (\_ -> ( comments, Just docComment ))
+                            )
                 )
         ]
-        Nothing
+        ( [], Nothing )
 
 
 
 -- DEFINITION and ANNOTATION
 
 
-valueDecl : SyntaxVersion -> Maybe Src.Comment -> A.Position -> Space.Parser E.Decl Decl
-valueDecl syntaxVersion maybeDocs start =
+valueDecl : SyntaxVersion -> Maybe Src.Comment -> Src.FComments -> A.Position -> Space.Parser E.Decl (Src.C2 Decl)
+valueDecl syntaxVersion maybeDocs docComments start =
     Var.lower E.DeclStart
         |> P.bind
             (\name ->
@@ -82,22 +85,28 @@ valueDecl syntaxVersion maybeDocs start =
                             P.specialize (E.DeclDef name) <|
                                 (Space.chompAndCheckIndent E.DeclDefSpace E.DeclDefIndentEquals
                                     |> P.bind
-                                        (\_ ->
+                                        (\postNameComments ->
                                             P.oneOf E.DeclDefEquals
                                                 [ P.word1 ':' E.DeclDefEquals
                                                     |> P.bind (\_ -> Space.chompAndCheckIndent E.DeclDefSpace E.DeclDefIndentType)
-                                                    |> P.bind (\_ -> P.specialize E.DeclDefType Type.expression)
                                                     |> P.bind
-                                                        (\( tipe, _ ) ->
-                                                            Space.checkFreshLine E.DeclDefNameRepeat
-                                                                |> P.bind (\_ -> chompMatchingName name)
+                                                        (\preTypeComments ->
+                                                            P.specialize E.DeclDefType (Type.expression preTypeComments)
                                                                 |> P.bind
-                                                                    (\defName ->
-                                                                        Space.chompAndCheckIndent E.DeclDefSpace E.DeclDefIndentEquals
-                                                                            |> P.bind (\_ -> chompDefArgsAndBody syntaxVersion maybeDocs start defName (Just tipe) [])
+                                                                    (\( ( ( preTipeComments, postTipeComments, _ ), tipe ), _ ) ->
+                                                                        Space.checkFreshLine E.DeclDefNameRepeat
+                                                                            |> P.bind (\_ -> chompMatchingName name)
+                                                                            |> P.bind
+                                                                                (\defName ->
+                                                                                    Space.chompAndCheckIndent E.DeclDefSpace E.DeclDefIndentEquals
+                                                                                        |> P.bind
+                                                                                            (\preArgComments ->
+                                                                                                chompDefArgsAndBody syntaxVersion maybeDocs docComments start defName (Just ( postTipeComments, ( ( postNameComments, preTipeComments ), tipe ) )) preArgComments []
+                                                                                            )
+                                                                                )
                                                                     )
                                                         )
-                                                , chompDefArgsAndBody syntaxVersion maybeDocs start (A.at start end name) Nothing []
+                                                , chompDefArgsAndBody syntaxVersion maybeDocs docComments start (A.at start end name) Nothing postNameComments []
                                                 ]
                                         )
                                 )
@@ -105,30 +114,36 @@ valueDecl syntaxVersion maybeDocs start =
             )
 
 
-chompDefArgsAndBody : SyntaxVersion -> Maybe Src.Comment -> A.Position -> A.Located Name -> Maybe Src.Type -> List Src.Pattern -> Space.Parser E.DeclDef Decl
-chompDefArgsAndBody syntaxVersion maybeDocs start name tipe revArgs =
+chompDefArgsAndBody : SyntaxVersion -> Maybe Src.Comment -> Src.FComments -> A.Position -> A.Located Name -> Maybe (Src.C1 (Src.C2 Src.Type)) -> Src.FComments -> List (Src.C1 Src.Pattern) -> Space.Parser E.DeclDef (Src.C2 Decl)
+chompDefArgsAndBody syntaxVersion maybeDocs docComments start name tipe preArgComments revArgs =
     P.oneOf E.DeclDefEquals
         [ P.specialize E.DeclDefArg (Pattern.term syntaxVersion)
             |> P.bind
                 (\arg ->
                     Space.chompAndCheckIndent E.DeclDefSpace E.DeclDefIndentEquals
-                        |> P.bind (\_ -> chompDefArgsAndBody syntaxVersion maybeDocs start name tipe (arg :: revArgs))
+                        |> P.bind
+                            (\postArgComments ->
+                                chompDefArgsAndBody syntaxVersion maybeDocs docComments start name tipe postArgComments (( preArgComments, arg ) :: revArgs)
+                            )
                 )
         , P.word1 '=' E.DeclDefEquals
             |> P.bind (\_ -> Space.chompAndCheckIndent E.DeclDefSpace E.DeclDefIndentBody)
-            |> P.bind (\_ -> P.specialize E.DeclDefBody (Expr.expression syntaxVersion))
-            |> P.fmap
-                (\( body, end ) ->
-                    let
-                        value : Src.Value
-                        value =
-                            Src.Value name (List.reverse revArgs) body tipe
+            |> P.bind
+                (\preBodyComments ->
+                    P.specialize E.DeclDefBody (Expr.expression syntaxVersion)
+                        |> P.fmap
+                            (\( ( trailingComments, body ), end ) ->
+                                let
+                                    value : Src.Value
+                                    value =
+                                        Src.Value docComments ( preArgComments, name ) (List.reverse revArgs) ( preBodyComments, body ) tipe
 
-                        avalue : A.Located Src.Value
-                        avalue =
-                            A.at start end value
-                    in
-                    ( Value maybeDocs avalue, end )
+                                    avalue : A.Located Src.Value
+                                    avalue =
+                                        A.at start end value
+                                in
+                                ( ( ( [], trailingComments ), Value maybeDocs avalue ), end )
+                            )
                 )
         ]
 
@@ -167,35 +182,38 @@ chompMatchingName expectedName =
 -- TYPE DECLARATIONS
 
 
-typeDecl : Maybe Src.Comment -> A.Position -> Space.Parser E.Decl Decl
+typeDecl : Maybe Src.Comment -> A.Position -> Space.Parser E.Decl (Src.C2 Decl)
 typeDecl maybeDocs start =
     P.inContext E.DeclType (Keyword.type_ E.DeclStart) <|
         (Space.chompAndCheckIndent E.DT_Space E.DT_IndentName
             |> P.bind
-                (\_ ->
+                (\postTypeComments ->
                     P.oneOf E.DT_Name
                         [ P.inContext E.DT_Alias (Keyword.alias_ E.DT_Name) <|
                             (Space.chompAndCheckIndent E.AliasSpace E.AliasIndentEquals
-                                |> P.bind (\_ -> chompAliasNameToEquals)
                                 |> P.bind
-                                    (\( name, args ) ->
-                                        P.specialize E.AliasBody Type.expression
-                                            |> P.fmap
-                                                (\( tipe, end ) ->
-                                                    let
-                                                        alias_ : A.Located Src.Alias
-                                                        alias_ =
-                                                            A.at start end (Src.Alias name args tipe)
-                                                    in
-                                                    ( Alias maybeDocs alias_, end )
+                                    (\preComments ->
+                                        chompAliasNameToEquals
+                                            |> P.bind
+                                                (\( ( name, args, postComments ), preTypeComments ) ->
+                                                    P.specialize E.AliasBody (Type.expression [])
+                                                        |> P.fmap
+                                                            (\( ( _, tipe ), end ) ->
+                                                                let
+                                                                    alias_ : A.Located Src.Alias
+                                                                    alias_ =
+                                                                        A.at start end (Src.Alias postTypeComments ( ( preComments, postComments ), name ) args ( preTypeComments, tipe ))
+                                                                in
+                                                                ( ( ( [], [] ), Alias maybeDocs alias_ ), end )
+                                                            )
                                                 )
                                     )
                             )
                         , P.specialize E.DT_Union <|
-                            (chompCustomNameToEquals
+                            (chompCustomNameToEquals postTypeComments
                                 |> P.bind
-                                    (\( name, args ) ->
-                                        Type.variant
+                                    (\( preVariantsComments, ( name, args ) ) ->
+                                        Type.variant preVariantsComments
                                             |> P.bind
                                                 (\( firstVariant, firstEnd ) ->
                                                     chompVariants [ firstVariant ] firstEnd
@@ -206,7 +224,7 @@ typeDecl maybeDocs start =
                                                                     union =
                                                                         A.at start end (Src.Union name args variants)
                                                                 in
-                                                                ( Union maybeDocs union, end )
+                                                                ( ( ( [], [] ), Union maybeDocs union ), end )
                                                             )
                                                 )
                                     )
@@ -220,28 +238,34 @@ typeDecl maybeDocs start =
 -- TYPE ALIASES
 
 
-chompAliasNameToEquals : P.Parser E.TypeAlias ( A.Located Name, List (A.Located Name) )
+chompAliasNameToEquals : P.Parser E.TypeAlias ( ( A.Located Name, List (Src.C1 (A.Located Name)), Src.FComments ), Src.FComments )
 chompAliasNameToEquals =
     P.addLocation (Var.upper E.AliasName)
         |> P.bind
             (\name ->
                 Space.chompAndCheckIndent E.AliasSpace E.AliasIndentEquals
-                    |> P.bind (\_ -> chompAliasNameToEqualsHelp name [])
+                    |> P.bind
+                        (\comments ->
+                            chompAliasNameToEqualsHelp name [] comments
+                        )
             )
 
 
-chompAliasNameToEqualsHelp : A.Located Name -> List (A.Located Name) -> P.Parser E.TypeAlias ( A.Located Name, List (A.Located Name) )
-chompAliasNameToEqualsHelp name args =
+chompAliasNameToEqualsHelp : A.Located Name -> List (Src.C1 (A.Located Name)) -> Src.FComments -> P.Parser E.TypeAlias ( ( A.Located Name, List (Src.C1 (A.Located Name)), Src.FComments ), Src.FComments )
+chompAliasNameToEqualsHelp name args comments =
     P.oneOf E.AliasEquals
         [ P.addLocation (Var.lower E.AliasEquals)
             |> P.bind
                 (\arg ->
                     Space.chompAndCheckIndent E.AliasSpace E.AliasIndentEquals
-                        |> P.bind (\_ -> chompAliasNameToEqualsHelp name (arg :: args))
+                        |> P.bind
+                            (\postComments ->
+                                chompAliasNameToEqualsHelp name (( comments, arg ) :: args) postComments
+                            )
                 )
         , P.word1 '=' E.AliasEquals
             |> P.bind (\_ -> Space.chompAndCheckIndent E.AliasSpace E.AliasIndentBody)
-            |> P.fmap (\_ -> ( name, List.reverse args ))
+            |> P.fmap (\preBodyComments -> ( ( name, List.reverse args, comments ), preBodyComments ))
         ]
 
 
@@ -249,38 +273,38 @@ chompAliasNameToEqualsHelp name args =
 -- CUSTOM TYPES
 
 
-chompCustomNameToEquals : P.Parser E.CustomType ( A.Located Name, List (A.Located Name) )
-chompCustomNameToEquals =
+chompCustomNameToEquals : Src.FComments -> P.Parser E.CustomType (Src.C1 ( Src.C2 (A.Located Name), List (Src.C1 (A.Located Name)) ))
+chompCustomNameToEquals preNameComments =
     P.addLocation (Var.upper E.CT_Name)
         |> P.bind
             (\name ->
                 Space.chompAndCheckIndent E.CT_Space E.CT_IndentEquals
-                    |> P.bind (\_ -> chompCustomNameToEqualsHelp name [])
+                    |> P.bind (\trailingComments -> chompCustomNameToEqualsHelp trailingComments ( preNameComments, name ) [])
             )
 
 
-chompCustomNameToEqualsHelp : A.Located Name -> List (A.Located Name) -> P.Parser E.CustomType ( A.Located Name, List (A.Located Name) )
-chompCustomNameToEqualsHelp name args =
+chompCustomNameToEqualsHelp : Src.FComments -> Src.C1 (A.Located Name) -> List (Src.C1 (A.Located Name)) -> P.Parser E.CustomType (Src.C1 ( Src.C2 (A.Located Name), List (Src.C1 (A.Located Name)) ))
+chompCustomNameToEqualsHelp trailingComments (( preNameComments, name_ ) as name) args =
     P.oneOf E.CT_Equals
         [ P.addLocation (Var.lower E.CT_Equals)
             |> P.bind
                 (\arg ->
                     Space.chompAndCheckIndent E.CT_Space E.CT_IndentEquals
-                        |> P.bind (\_ -> chompCustomNameToEqualsHelp name (arg :: args))
+                        |> P.bind (\postArgComments -> chompCustomNameToEqualsHelp postArgComments name (( trailingComments, arg ) :: args))
                 )
         , P.word1 '=' E.CT_Equals
             |> P.bind (\_ -> Space.chompAndCheckIndent E.CT_Space E.CT_IndentAfterEquals)
-            |> P.fmap (\_ -> ( name, List.reverse args ))
+            |> P.fmap (\postEqualComments -> ( postEqualComments, ( ( ( preNameComments, trailingComments ), name_ ), List.reverse args ) ))
         ]
 
 
-chompVariants : List ( A.Located Name, List Src.Type ) -> A.Position -> Space.Parser E.CustomType (List ( A.Located Name, List Src.Type ))
+chompVariants : List (Src.C2Eol ( A.Located Name, List (Src.C1 Src.Type) )) -> A.Position -> Space.Parser E.CustomType (List (Src.C2Eol ( A.Located Name, List (Src.C1 Src.Type) )))
 chompVariants variants end =
     P.oneOfWithFallback
         [ Space.checkIndent end E.CT_IndentBar
             |> P.bind (\_ -> P.word1 '|' E.CT_Bar)
             |> P.bind (\_ -> Space.chompAndCheckIndent E.CT_Space E.CT_IndentAfterBar)
-            |> P.bind (\_ -> Type.variant)
+            |> P.bind (\preTypeComments -> Type.variant preTypeComments)
             |> P.bind (\( variant, newEnd ) -> chompVariants (variant :: variants) newEnd)
         ]
         ( List.reverse variants, end )
@@ -290,24 +314,30 @@ chompVariants variants end =
 -- PORT
 
 
-portDecl : Maybe Src.Comment -> Space.Parser E.Decl Decl
+portDecl : Maybe Src.Comment -> Space.Parser E.Decl (Src.C2 Decl)
 portDecl maybeDocs =
     P.inContext E.Port (Keyword.port_ E.DeclStart) <|
         (Space.chompAndCheckIndent E.PortSpace E.PortIndentName
-            |> P.bind (\_ -> P.addLocation (Var.lower E.PortName))
             |> P.bind
-                (\name ->
-                    Space.chompAndCheckIndent E.PortSpace E.PortIndentColon
-                        |> P.bind (\_ -> P.word1 ':' E.PortColon)
-                        |> P.bind (\_ -> Space.chompAndCheckIndent E.PortSpace E.PortIndentType)
+                (\preNameComments ->
+                    P.addLocation (Var.lower E.PortName)
                         |> P.bind
-                            (\_ ->
-                                P.specialize E.PortType Type.expression
-                                    |> P.fmap
-                                        (\( tipe, end ) ->
-                                            ( Port maybeDocs (Src.Port name tipe)
-                                            , end
-                                            )
+                            (\name ->
+                                Space.chompAndCheckIndent E.PortSpace E.PortIndentColon
+                                    |> P.bind
+                                        (\postNameComments ->
+                                            P.word1 ':' E.PortColon
+                                                |> P.bind (\_ -> Space.chompAndCheckIndent E.PortSpace E.PortIndentType)
+                                                |> P.bind
+                                                    (\typeComments ->
+                                                        P.specialize E.PortType (Type.expression [])
+                                                            |> P.fmap
+                                                                (\( ( ( preTipeComments, postTipeComments, _ ), tipe ), end ) ->
+                                                                    ( ( ( preTipeComments, postTipeComments ), Port maybeDocs (Src.Port typeComments ( ( preNameComments, postNameComments ), name ) tipe) )
+                                                                    , end
+                                                                    )
+                                                                )
+                                                    )
                                         )
                             )
                 )
@@ -320,7 +350,7 @@ portDecl maybeDocs =
 --
 
 
-infix_ : P.Parser E.Module (A.Located Src.Infix)
+infix_ : P.Parser E.Module (Src.C1 (A.Located Src.Infix))
 infix_ =
     let
         err : P.Row -> P.Col -> E.Module
@@ -337,37 +367,54 @@ infix_ =
                 Keyword.infix_ err
                     |> P.bind (\_ -> Space.chompAndCheckIndent err_ err)
                     |> P.bind
-                        (\_ ->
+                        (\preBinopComments ->
                             P.oneOf err
                                 [ Keyword.left_ err |> P.fmap (\_ -> Binop.Left)
                                 , Keyword.right_ err |> P.fmap (\_ -> Binop.Right)
                                 , Keyword.non_ err |> P.fmap (\_ -> Binop.Non)
                                 ]
+                                |> P.fmap (Tuple.pair preBinopComments)
                         )
                     |> P.bind
                         (\associativity ->
                             Space.chompAndCheckIndent err_ err
-                                |> P.bind (\_ -> Number.precedence err)
+                                |> P.bind
+                                    (\prePrecedenceComments ->
+                                        Number.precedence err
+                                            |> P.fmap (Tuple.pair prePrecedenceComments)
+                                    )
                                 |> P.bind
                                     (\precedence ->
                                         Space.chompAndCheckIndent err_ err
-                                            |> P.bind (\_ -> P.word1 '(' err)
-                                            |> P.bind (\_ -> Symbol.operator err err_)
                                             |> P.bind
-                                                (\op ->
-                                                    P.word1 ')' err
-                                                        |> P.bind (\_ -> Space.chompAndCheckIndent err_ err)
-                                                        |> P.bind (\_ -> P.word1 '=' err)
-                                                        |> P.bind (\_ -> Space.chompAndCheckIndent err_ err)
-                                                        |> P.bind (\_ -> Var.lower err)
+                                                (\preOpComments ->
+                                                    P.word1 '(' err
+                                                        |> P.bind (\_ -> Symbol.operator err err_)
                                                         |> P.bind
-                                                            (\name ->
-                                                                P.getPosition
+                                                            (\op ->
+                                                                P.word1 ')' err
+                                                                    |> P.bind (\_ -> Space.chompAndCheckIndent err_ err)
                                                                     |> P.bind
-                                                                        (\end ->
-                                                                            Space.chomp err_
-                                                                                |> P.bind (\_ -> Space.checkFreshLine err)
-                                                                                |> P.fmap (\_ -> A.at start end (Src.Infix op associativity precedence name))
+                                                                        (\postOpComments ->
+                                                                            P.word1 '=' err
+                                                                                |> P.bind (\_ -> Space.chompAndCheckIndent err_ err)
+                                                                                |> P.bind
+                                                                                    (\preNameComments ->
+                                                                                        Var.lower err
+                                                                                            |> P.bind
+                                                                                                (\name ->
+                                                                                                    P.getPosition
+                                                                                                        |> P.bind
+                                                                                                            (\end ->
+                                                                                                                Space.chomp err_
+                                                                                                                    |> P.bind
+                                                                                                                        (\comments ->
+                                                                                                                            Space.checkFreshLine err
+                                                                                                                                |> P.fmap (\_ -> ( comments, A.at start end (Src.Infix ( ( preOpComments, postOpComments ), op ) associativity precedence ( preNameComments, name )) ))
+                                                                                                                        )
+                                                                                                            )
+                                                                                                )
+                                                                                    )
                                                                         )
                                                             )
                                                 )

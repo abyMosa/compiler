@@ -63,7 +63,7 @@ collectVars : Src.Module -> LResult i w (Dict String Name.Name Env.Var)
 collectVars (Src.Module _ _ _ _ _ values _ _ _ effects) =
     let
         addDecl : A.Located Src.Value -> Dups.Tracker Env.Var -> Dups.Tracker Env.Var
-        addDecl (A.At _ (Src.Value (A.At region name) _ _ _)) =
+        addDecl (A.At _ (Src.Value _ ( _, A.At region name ) _ _ _)) =
             Dups.insert name region (Env.TopLevel region)
     in
     Dups.detect Error.DuplicateDecl <|
@@ -79,20 +79,20 @@ toEffectDups effects =
         Src.Ports ports ->
             let
                 addPort : Src.Port -> Dups.Tracker Env.Var -> Dups.Tracker Env.Var
-                addPort (Src.Port (A.At region name) _) =
+                addPort (Src.Port _ ( _, A.At region name ) _) =
                     Dups.insert name region (Env.TopLevel region)
             in
             List.foldl addPort Dups.none ports
 
         Src.Manager _ manager ->
             case manager of
-                Src.Cmd (A.At region _) ->
+                Src.Cmd ( _, ( _, A.At region _ ) ) ->
                     Dups.one "command" region (Env.TopLevel region)
 
-                Src.Sub (A.At region _) ->
+                Src.Sub ( _, ( _, A.At region _ ) ) ->
                     Dups.one "subscription" region (Env.TopLevel region)
 
-                Src.Fx (A.At regionCmd _) (A.At regionSub _) ->
+                Src.Fx ( _, ( _, A.At regionCmd _ ) ) ( _, ( _, A.At regionSub _ ) ) ->
                     Dups.union
                         (Dups.one "command" regionCmd (Env.TopLevel regionCmd))
                         (Dups.one "subscription" regionSub (Env.TopLevel regionSub))
@@ -106,11 +106,11 @@ addTypes : Src.Module -> Env.Env -> LResult i w Env.Env
 addTypes (Src.Module syntaxVersion _ _ _ _ _ unions aliases _ _) env =
     let
         addAliasDups : A.Located Src.Alias -> Dups.Tracker () -> Dups.Tracker ()
-        addAliasDups (A.At _ (Src.Alias (A.At region name) _ _)) =
+        addAliasDups (A.At _ (Src.Alias _ ( _, A.At region name ) _ _)) =
             Dups.insert name region ()
 
         addUnionDups : A.Located Src.Union -> Dups.Tracker () -> Dups.Tracker ()
-        addUnionDups (A.At _ (Src.Union (A.At region name) _ _)) =
+        addUnionDups (A.At _ (Src.Union ( _, A.At region name ) _ _)) =
             Dups.insert name region ()
 
         typeNameDups : Dups.Tracker ()
@@ -126,7 +126,7 @@ addTypes (Src.Module syntaxVersion _ _ _ _ _ unions aliases _ _) env =
 
 
 addUnion : IO.Canonical -> Env.Exposed Env.Type -> A.Located Src.Union -> LResult i w (Env.Exposed Env.Type)
-addUnion home types ((A.At _ (Src.Union (A.At _ name) _ _)) as union) =
+addUnion home types ((A.At _ (Src.Union ( _, A.At _ name ) _ _)) as union) =
     R.fmap
         (\arity ->
             let
@@ -160,7 +160,7 @@ addAliases syntaxVersion aliases env =
 addAlias : SyntaxVersion -> Env.Env -> Graph.SCC (A.Located Src.Alias) -> LResult i w Env.Env
 addAlias syntaxVersion ({ home, vars, types, ctors, binops, q_vars, q_types, q_ctors } as env) scc =
     case scc of
-        Graph.AcyclicSCC ((A.At _ (Src.Alias (A.At _ name) _ tipe)) as alias) ->
+        Graph.AcyclicSCC ((A.At _ (Src.Alias _ ( _, A.At _ name ) _ ( _, tipe ))) as alias) ->
             checkAliasFreeVars alias
                 |> R.bind
                     (\args ->
@@ -183,13 +183,13 @@ addAlias syntaxVersion ({ home, vars, types, ctors, binops, q_vars, q_types, q_c
         Graph.CyclicSCC [] ->
             R.ok env
 
-        Graph.CyclicSCC (((A.At _ (Src.Alias (A.At region name1) _ tipe)) as alias) :: others) ->
+        Graph.CyclicSCC (((A.At _ (Src.Alias _ ( _, A.At region name1 ) _ ( _, tipe ))) as alias) :: others) ->
             checkAliasFreeVars alias
                 |> R.bind
                     (\args ->
                         let
                             toName : A.Located Src.Alias -> Name
-                            toName (A.At _ (Src.Alias (A.At _ name) _ _)) =
+                            toName (A.At _ (Src.Alias _ ( _, A.At _ name ) _ _)) =
                                 name
                         in
                         R.throw (Error.RecursiveAlias region name1 args tipe (List.map toName others))
@@ -201,33 +201,36 @@ addAlias syntaxVersion ({ home, vars, types, ctors, binops, q_vars, q_types, q_c
 
 
 toNode : A.Located Src.Alias -> ( A.Located Src.Alias, Name.Name, List Name.Name )
-toNode ((A.At _ (Src.Alias (A.At _ name) _ tipe)) as alias) =
+toNode ((A.At _ (Src.Alias _ ( _, A.At _ name ) _ ( _, tipe ))) as alias) =
     ( alias, name, getEdges tipe [] )
 
 
 getEdges : Src.Type -> List Name.Name -> List Name.Name
 getEdges (A.At _ tipe) edges =
     case tipe of
-        Src.TLambda arg result ->
+        Src.TLambda ( _, arg ) ( _, result ) ->
             getEdges result (getEdges arg edges)
 
         Src.TVar _ ->
             edges
 
         Src.TType _ name args ->
-            List.foldl getEdges (name :: edges) args
+            List.foldl getEdges (name :: edges) (List.map Src.c1Value args)
 
         Src.TTypeQual _ _ _ args ->
-            List.foldl getEdges edges args
+            List.foldl getEdges edges (List.map Src.c1Value args)
 
-        Src.TRecord fields _ ->
-            List.foldl (\( _, t ) es -> getEdges t es) edges fields
+        Src.TRecord fields _ _ ->
+            List.foldl (\( _, ( _, ( _, t ) ) ) es -> getEdges t es) edges fields
 
         Src.TUnit ->
             edges
 
-        Src.TTuple a b cs ->
-            List.foldl getEdges (getEdges b (getEdges a edges)) cs
+        Src.TTuple ( _, a ) ( _, b ) cs ->
+            List.foldl getEdges (getEdges b (getEdges a edges)) (List.map Src.c2EolValue cs)
+
+        Src.TParens ( _, tipe_ ) ->
+            getEdges tipe_ edges
 
 
 
@@ -235,7 +238,7 @@ getEdges (A.At _ tipe) edges =
 
 
 checkUnionFreeVars : A.Located Src.Union -> LResult i w Int
-checkUnionFreeVars (A.At unionRegion (Src.Union (A.At _ name) args ctors)) =
+checkUnionFreeVars (A.At unionRegion (Src.Union ( _, A.At _ name ) args ctors)) =
     let
         addArg : A.Located Name -> Dups.Tracker A.Region -> Dups.Tracker A.Region
         addArg (A.At region arg) dict =
@@ -245,13 +248,13 @@ checkUnionFreeVars (A.At unionRegion (Src.Union (A.At _ name) args ctors)) =
         addCtorFreeVars ( _, tipes ) freeVars =
             List.foldl addFreeVars freeVars tipes
     in
-    Dups.detect (Error.DuplicateUnionArg name) (List.foldr addArg Dups.none args)
+    Dups.detect (Error.DuplicateUnionArg name) (List.foldr addArg Dups.none (List.map Src.c1Value args))
         |> R.bind
             (\boundVars ->
                 let
                     freeVars : Dict String Name A.Region
                     freeVars =
-                        List.foldr addCtorFreeVars Dict.empty ctors
+                        List.foldr addCtorFreeVars Dict.empty (List.map (Src.c2EolValue >> Tuple.mapSecond (List.map Src.c1Value)) ctors)
                 in
                 case Dict.toList compare (Dict.diff freeVars boundVars) of
                     [] ->
@@ -259,15 +262,15 @@ checkUnionFreeVars (A.At unionRegion (Src.Union (A.At _ name) args ctors)) =
 
                     unbound :: unbounds ->
                         R.throw <|
-                            Error.TypeVarsUnboundInUnion unionRegion name (List.map A.toValue args) unbound unbounds
+                            Error.TypeVarsUnboundInUnion unionRegion name (List.map (Src.c1Value >> A.toValue) args) unbound unbounds
             )
 
 
 checkAliasFreeVars : A.Located Src.Alias -> LResult i w (List Name.Name)
-checkAliasFreeVars (A.At aliasRegion (Src.Alias (A.At _ name) args tipe)) =
+checkAliasFreeVars (A.At aliasRegion (Src.Alias _ ( _, A.At _ name ) args ( _, tipe ))) =
     let
-        addArg : A.Located Name -> Dups.Tracker A.Region -> Dups.Tracker A.Region
-        addArg (A.At region arg) dict =
+        addArg : Src.C1 (A.Located Name) -> Dups.Tracker A.Region -> Dups.Tracker A.Region
+        addArg ( _, A.At region arg ) dict =
             Dups.insert arg region region dict
     in
     Dups.detect (Error.DuplicateAliasArg name) (List.foldr addArg Dups.none args)
@@ -283,13 +286,13 @@ checkAliasFreeVars (A.At aliasRegion (Src.Alias (A.At _ name) args tipe)) =
                         Dict.size (Dict.intersection compare boundVars freeVars)
                 in
                 if Dict.size boundVars == overlap && Dict.size freeVars == overlap then
-                    R.ok (List.map A.toValue args)
+                    R.ok (List.map (Src.c1Value >> A.toValue) args)
 
                 else
                     R.throw <|
                         Error.TypeVarsMessedUpInAlias aliasRegion
                             name
-                            (List.map A.toValue args)
+                            (List.map (Src.c1Value >> A.toValue) args)
                             (Dict.toList compare (Dict.diff boundVars freeVars))
                             (Dict.toList compare (Dict.diff freeVars boundVars))
             )
@@ -298,19 +301,19 @@ checkAliasFreeVars (A.At aliasRegion (Src.Alias (A.At _ name) args tipe)) =
 addFreeVars : Src.Type -> Dict String Name.Name A.Region -> Dict String Name.Name A.Region
 addFreeVars (A.At region tipe) freeVars =
     case tipe of
-        Src.TLambda arg result ->
+        Src.TLambda ( _, arg ) ( _, result ) ->
             addFreeVars result (addFreeVars arg freeVars)
 
         Src.TVar name ->
             Dict.insert identity name region freeVars
 
         Src.TType _ _ args ->
-            List.foldl addFreeVars freeVars args
+            List.foldl addFreeVars freeVars (List.map Src.c1Value args)
 
         Src.TTypeQual _ _ _ args ->
-            List.foldl addFreeVars freeVars args
+            List.foldl addFreeVars freeVars (List.map Src.c1Value args)
 
-        Src.TRecord fields maybeExt ->
+        Src.TRecord fields maybeExt _ ->
             let
                 extFreeVars : Dict String Name A.Region
                 extFreeVars =
@@ -318,16 +321,19 @@ addFreeVars (A.At region tipe) freeVars =
                         Nothing ->
                             freeVars
 
-                        Just (A.At extRegion ext) ->
+                        Just ( _, A.At extRegion ext ) ->
                             Dict.insert identity ext extRegion freeVars
             in
-            List.foldl (\( _, t ) fvs -> addFreeVars t fvs) extFreeVars fields
+            List.foldl (\( _, ( _, ( _, t ) ) ) fvs -> addFreeVars t fvs) extFreeVars fields
 
         Src.TUnit ->
             freeVars
 
-        Src.TTuple a b cs ->
-            List.foldl addFreeVars (addFreeVars b (addFreeVars a freeVars)) cs
+        Src.TTuple ( _, a ) ( _, b ) cs ->
+            List.foldl addFreeVars (addFreeVars b (addFreeVars a freeVars)) (List.map Src.c2EolValue cs)
+
+        Src.TParens ( _, tipe_ ) ->
+            addFreeVars tipe_ freeVars
 
 
 
@@ -373,11 +379,11 @@ type alias CtorDups =
 
 
 canonicalizeAlias : SyntaxVersion -> Env.Env -> A.Located Src.Alias -> LResult i w ( ( Name.Name, Can.Alias ), CtorDups )
-canonicalizeAlias syntaxVersion ({ home } as env) (A.At _ (Src.Alias (A.At region name) args tipe)) =
+canonicalizeAlias syntaxVersion ({ home } as env) (A.At _ (Src.Alias _ ( _, A.At region name ) args ( _, tipe ))) =
     let
         vars : List Name
         vars =
-            List.map A.toValue args
+            List.map (Src.c1Value >> A.toValue) args
     in
     Type.canonicalize syntaxVersion env tipe
         |> R.bind
@@ -416,14 +422,14 @@ toRecordCtor home name vars fields =
 
 
 canonicalizeUnion : SyntaxVersion -> Env.Env -> A.Located Src.Union -> LResult i w ( ( Name.Name, Can.Union ), CtorDups )
-canonicalizeUnion syntaxVersion ({ home } as env) (A.At _ (Src.Union (A.At _ name) avars ctors)) =
-    R.indexedTraverse (canonicalizeCtor syntaxVersion env) ctors
+canonicalizeUnion syntaxVersion ({ home } as env) (A.At _ (Src.Union ( _, A.At _ name ) avars ctors)) =
+    R.indexedTraverse (canonicalizeCtor syntaxVersion env) (List.map (Tuple.mapSecond (List.map Src.c1Value)) (List.map Src.c2EolValue ctors))
         |> R.bind
             (\cctors ->
                 let
                     vars : List Name
                     vars =
-                        List.map A.toValue avars
+                        List.map (Src.c1Value >> A.toValue) avars
 
                     alts : List Can.Ctor
                     alts =
@@ -448,14 +454,14 @@ canonicalizeCtor syntaxVersion env index ( A.At region ctor, tipes ) =
             )
 
 
-toOpts : List ( A.Located Name.Name, List Src.Type ) -> Can.CtorOpts
+toOpts : List (Src.C2Eol ( A.Located Name.Name, List (Src.C1 Src.Type) )) -> Can.CtorOpts
 toOpts ctors =
     case ctors of
-        [ ( _, [ _ ] ) ] ->
+        [ ( _, ( _, [ _ ] ) ) ] ->
             Can.Unbox
 
         _ ->
-            if List.all (List.isEmpty << Tuple.second) ctors then
+            if List.all (List.isEmpty << Tuple.second) (List.map Src.c2EolValue ctors) then
                 Can.Enum
 
             else

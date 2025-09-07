@@ -6,13 +6,20 @@ elm-stuff
 # Guida
 guida-stuff
 
+# Main
+lib/guida.node.js
+lib/guida.node.min.js
+
+# Browser
+lib/guida.browser.js
+lib/guida.browser.min.js
+
 # Command line
 bin/guida.js
 bin/guida.min.js
 
-# Browser
-lib/guida.js
-lib/guida.min.js
-
 # Try
 try/public/app.js
+
+# Assets
+assets/some-application/index.html

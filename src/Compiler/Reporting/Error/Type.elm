@@ -62,7 +62,7 @@ type Context
     | CallArity MaybeName Int
     | CallArg MaybeName Index.ZeroBased
     | RecordAccess A.Region (Maybe Name) A.Region Name
-    | RecordUpdateKeys Name (Dict String Name Can.FieldUpdate)
+    | RecordUpdateKeys (Dict String Name Can.FieldUpdate)
     | RecordUpdateValue Name
     | Destructure
 
@@ -1298,7 +1298,7 @@ toExprReport source localizer exprRegion category tipe expected =
                                   )
                                 )
 
-                RecordUpdateKeys record expectedFields ->
+                RecordUpdateKeys expectedFields ->
                     case T.iteratedDealias tipe of
                         T.Record actualFields ext ->
                             case List.sortBy Tuple.first (Dict.toList compare (Dict.diff expectedFields actualFields)) of
@@ -1307,7 +1307,7 @@ toExprReport source localizer exprRegion category tipe expected =
                                         ( ( Nothing
                                           , "Something is off with this record update:"
                                           )
-                                        , ( "The `" ++ record ++ "` record is"
+                                        , ( "The record is"
                                           , "But this update needs it to be compatable with:"
                                           , [ D.reflow
                                                 "Do you mind creating an <http://sscce.org/> that produces this error message and sharing it at <https://github.com/elm/error-message-catalog/issues> so we can try to give better advice here?"
@@ -1317,31 +1317,23 @@ toExprReport source localizer exprRegion category tipe expected =
 
                                 ( field, Can.FieldUpdate fieldRegion _ ) :: _ ->
                                     let
-                                        rStr : String
-                                        rStr =
-                                            "`" ++ record ++ "`"
-
                                         fStr : String
                                         fStr =
                                             "`" ++ field ++ "`"
                                     in
                                     custom (Just fieldRegion)
                                         ( D.reflow <|
-                                            "The "
-                                                ++ rStr
-                                                ++ " record does not have a "
+                                            "The record does not have a "
                                                 ++ fStr
                                                 ++ " field:"
                                         , case Suggest.sort field Tuple.first (Dict.toList compare actualFields) of
                                             [] ->
-                                                D.reflow <| "In fact, " ++ rStr ++ " is a record with NO fields!"
+                                                D.reflow <| "In fact, it is a record with NO fields!"
 
                                             f :: fs ->
                                                 D.stack
                                                     [ D.reflow <|
-                                                        "This is usually a typo. Here are the "
-                                                            ++ rStr
-                                                            ++ " fields that are most similar:"
+                                                        "This is usually a typo. Here are the record fields that are most similar:"
                                                     , toNearbyRecord localizer f fs ext
                                                     , D.fillSep
                                                         [ D.fromChars "So"
@@ -2838,10 +2830,9 @@ contextEncoder context =
                 , BE.string field
                 ]
 
-        RecordUpdateKeys record expectedFields ->
+        RecordUpdateKeys expectedFields ->
             BE.sequence
                 [ BE.unsignedInt8 10
-                , BE.string record
                 , BE.assocListDict compare BE.string Can.fieldUpdateEncoder expectedFields
                 ]
 
@@ -2900,8 +2891,7 @@ contextDecoder =
                             BD.string
 
                     10 ->
-                        BD.map2 RecordUpdateKeys
-                            BD.string
+                        BD.map RecordUpdateKeys
                             (BD.assocListDict identity BD.string Can.fieldUpdateDecoder)
 
                     11 ->

@@ -74,7 +74,7 @@ canonicalize pkg ifaces ((Src.Module syntaxVersion _ exports docs imports values
 
 
 canonicalizeBinop : A.Located Src.Infix -> ( Name, Can.Binop )
-canonicalizeBinop (A.At _ (Src.Infix op associativity precedence func)) =
+canonicalizeBinop (A.At _ (Src.Infix ( _, op ) ( _, associativity ) ( _, precedence ) ( _, func ))) =
     ( op, Can.Binop_ associativity precedence func )
 
 
@@ -85,6 +85,7 @@ canonicalizeBinop (A.At _ (Src.Infix op associativity precedence func)) =
 --
 -- 1. Detect cycles using ALL dependencies => needed for type inference
 -- 2. Detect cycles using DIRECT dependencies => nonterminating recursion
+--
 
 
 canonicalizeValues : SyntaxVersion -> Env.Env -> List (A.Located Src.Value) -> MResult i (List W.Warning) Can.Decls
@@ -171,11 +172,11 @@ type alias NodeTwo =
 
 
 toNodeOne : SyntaxVersion -> Env.Env -> A.Located Src.Value -> MResult i (List W.Warning) NodeOne
-toNodeOne syntaxVersion env (A.At _ (Src.Value ((A.At _ name) as aname) srcArgs body maybeType)) =
+toNodeOne syntaxVersion env (A.At _ (Src.Value _ ( _, (A.At _ name) as aname ) srcArgs ( _, body ) maybeType)) =
     case maybeType of
         Nothing ->
             Pattern.verify (Error.DPFuncArgs name)
-                (R.traverse (Pattern.canonicalize syntaxVersion env) srcArgs)
+                (R.traverse (Pattern.canonicalize syntaxVersion env) (List.map Src.c1Value srcArgs))
                 |> R.bind
                     (\( args, argBindings ) ->
                         Env.addLocals argBindings env
@@ -197,12 +198,12 @@ toNodeOne syntaxVersion env (A.At _ (Src.Value ((A.At _ name) as aname) srcArgs 
                                 )
                     )
 
-        Just srcType ->
+        Just ( _, ( _, srcType ) ) ->
             Type.toAnnotation syntaxVersion env srcType
                 |> R.bind
                     (\(Can.Forall freeVars tipe) ->
                         Pattern.verify (Error.DPFuncArgs name)
-                            (Expr.gatherTypedArgs syntaxVersion env name srcArgs tipe Index.first [])
+                            (Expr.gatherTypedArgs syntaxVersion env name (List.map Src.c1Value srcArgs) tipe Index.first [])
                             |> R.bind
                                 (\( ( args, resultType ), argBindings ) ->
                                     Env.addLocals argBindings env
@@ -259,16 +260,16 @@ canonicalizeExports :
     -> MResult i w Can.Exports
 canonicalizeExports values unions aliases binops effects (A.At region exposing_) =
     case exposing_ of
-        Src.Open ->
+        Src.Open _ _ ->
             R.ok (Can.ExportEverything region)
 
-        Src.Explicit exposeds ->
+        Src.Explicit (A.At _ exposeds) ->
             let
                 names : Dict String Name ()
                 names =
                     Dict.fromList identity (List.map valueToName values)
             in
-            R.traverse (checkExposed names unions aliases binops effects) exposeds
+            R.traverse (checkExposed names unions aliases binops effects) (List.map Src.c2Value exposeds)
                 |> R.bind
                     (\infos ->
                         Dups.detect Error.ExportDuplicate (Dups.unions infos)
@@ -277,7 +278,7 @@ canonicalizeExports values unions aliases binops effects (A.At region exposing_)
 
 
 valueToName : A.Located Src.Value -> ( Name, () )
-valueToName (A.At _ (Src.Value (A.At _ name) _ _ _)) =
+valueToName (A.At _ (Src.Value _ ( _, A.At _ name ) _ _ _)) =
     ( name, () )
 
 
@@ -310,7 +311,7 @@ checkExposed values unions aliases binops effects exposed =
             else
                 R.throw (Error.ExportNotFound region Error.BadOp name (Dict.keys compare binops))
 
-        Src.Upper (A.At region name) (Src.Public dotDotRegion) ->
+        Src.Upper (A.At region name) ( _, Src.Public dotDotRegion ) ->
             if Dict.member identity name unions then
                 ok name region Can.ExportUnionOpen
 
@@ -320,7 +321,7 @@ checkExposed values unions aliases binops effects exposed =
             else
                 R.throw (Error.ExportNotFound region Error.BadType name (Dict.keys compare unions ++ Dict.keys compare aliases))
 
-        Src.Upper (A.At region name) Src.Private ->
+        Src.Upper (A.At region name) ( _, Src.Private ) ->
             if Dict.member identity name unions then
                 ok name region Can.ExportUnionClosed
 

@@ -182,8 +182,8 @@ constrain rtv (A.At region expression) expected =
                                 )
                     )
 
-        Can.Update _ name expr fields ->
-            constrainUpdate rtv region name expr fields expected
+        Can.Update expr fields ->
+            constrainUpdate rtv region expr fields expected
 
         Can.Record fields ->
             constrainRecord rtv region fields expected
@@ -610,8 +610,8 @@ constrainField rtv expr =
 -- CONSTRAIN RECORD UPDATE
 
 
-constrainUpdate : RTV -> A.Region -> Name.Name -> Can.Expr -> Dict String (A.Located Name.Name) Can.FieldUpdate -> Expected Type -> IO Constraint
-constrainUpdate rtv region name expr locatedFields expected =
+constrainUpdate : RTV -> A.Region -> Can.Expr -> Dict String (A.Located Name.Name) Can.FieldUpdate -> Expected Type -> IO Constraint
+constrainUpdate rtv region expr locatedFields expected =
     Type.mkFlexVar
         |> IO.bind
             (\extVar ->
@@ -652,7 +652,7 @@ constrainUpdate rtv region name expr locatedFields expected =
                                             cons =
                                                 Dict.foldr compare (\_ ( _, _, c ) cs -> c :: cs) [ recordCon ] fieldDict
                                         in
-                                        constrain rtv expr (FromContext region (RecordUpdateKeys name fields) recordType)
+                                        constrain rtv expr (FromContext region (RecordUpdateKeys fields) recordType)
                                             |> IO.fmap (\con -> Type.exists vars (CAnd (fieldsCon :: con :: cons)))
                                     )
                         )

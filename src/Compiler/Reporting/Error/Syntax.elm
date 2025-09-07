@@ -5020,10 +5020,10 @@ toRecordReport source context record startRow startCol =
                                     , D.fromChars "a"
                                     , D.fromChars "name"
                                     , D.fromChars "like"
-                                    , D.dullyellow <| D.fromChars "userName"
+                                    , D.dullyellow (D.fromChars "userName")
                                     , D.fromChars "or"
-                                    , D.dullyellow <| D.fromChars "plantHeight"
-                                    , D.fromChars "."
+                                    , D.dullyellow (D.fromChars "plantHeight")
+                                        |> D.a (D.fromChars ".")
                                     ]
                                 , D.toSimpleNote "Field names must start with a lower-case letter. After that, you can use any sequence of letters, numbers, and underscores."
                                 , noteForRecordError
@@ -5161,10 +5161,10 @@ toRecordReport source context record startRow startCol =
                                     , D.fromChars "a"
                                     , D.fromChars "name"
                                     , D.fromChars "like"
-                                    , D.dullyellow <| D.fromChars "userName"
+                                    , D.dullyellow (D.fromChars "userName")
                                     , D.fromChars "or"
-                                    , D.dullyellow <| D.fromChars "plantHeight"
-                                    , D.fromChars "."
+                                    , D.dullyellow (D.fromChars "plantHeight")
+                                        |> D.a (D.fromChars ".")
                                     ]
                                 , D.toSimpleNote "Field names must start with a lower-case letter. After that, you can use any sequence of letters, numbers, and underscores."
                                 , noteForRecordError
@@ -7422,7 +7422,7 @@ toTRecordReport source context record startRow startCol =
                                     , D.fromChars "a"
                                     , D.fromChars "name"
                                     , D.fromChars "like"
-                                    , D.dullyellow <| D.fromChars "userName"
+                                    , D.dullyellow (D.fromChars "userName")
                                     , D.fromChars "or"
                                     , D.dullyellow (D.fromChars "plantHeight")
                                         |> D.a (D.fromChars ".")

@@ -2,7 +2,8 @@
 bin/guida.js
 elm-stuff
 examples
-lib/guida.js
+lib/guida.node.js
+lib/guida.browser.js
 guida-stuff
 review
 scripts

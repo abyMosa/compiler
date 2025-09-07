@@ -176,28 +176,29 @@ server.post("withCreateProcess", (request) => {
   tmp.file((err, path, fd) => {
     if (err) throw err;
 
-    const reader = fs.createReadStream(path);
+    nextCounter += 1;
 
-    reader.on("open", () => {
-      nextCounter += 1;
-      processes[nextCounter] = child_process.spawn(
-        createProcess.cmdspec.cmd,
-        createProcess.cmdspec.args,
-        {
-          stdio: [
-            createProcess.stdin,
-            createProcess.stdout,
-            createProcess.stderr,
-          ],
-        }
-      );
+    fs.createReadStream(path)
+      .on("data", (chunk) => {
+        processes[nextCounter].stdin.write(chunk);
+      })
+      .on("close", () => {
+        processes[nextCounter].stdin.end();
+      });
 
-      request.respond(200, null, JSON.stringify({ stdinHandle: fd, ph: nextCounter }));
-    });
+    processes[nextCounter] = child_process.spawn(
+      createProcess.cmdspec.cmd,
+      createProcess.cmdspec.args,
+      {
+        stdio: [
+          createProcess.stdin,
+          createProcess.stdout,
+          createProcess.stderr,
+        ],
+      }
+    );
 
-    reader.on("data", (chunk) => {
-      processes[nextCounter].stdin.end(chunk);
-    });
+    request.respond(200, null, JSON.stringify({ stdinHandle: fd, ph: nextCounter }));
   });
 });
 
@@ -208,7 +209,8 @@ server.post("hClose", (request) => {
 });
 
 server.post("waitForProcess", (request) => {
-  processes[request.body].on("exit", (code) => {
+  const ph = parseInt(request.body);
+  processes[ph].on("exit", (code) => {
     request.respond(200, null, code);
   });
 });
@@ -427,6 +429,15 @@ server.post("putMVar", (request) => {
   } else {
     mVars[id].subscribers.push({ action: "put", request, value });
   }
+});
+
+// NODE.JS SPECIFIC
+server.post("nodeGetDirname", (request) => {
+  request.respond(200, null, __dirname);
+});
+
+server.post("nodeMathRandom", (request) => {
+  request.respond(200, null, Math.random());
 });
 
 server.setDefaultHandler((request) => {
